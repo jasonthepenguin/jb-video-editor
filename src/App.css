@@ -53,10 +53,8 @@
   display: grid;
   gap: 1.5rem;
   grid-template-columns: 260px minmax(0, 1fr) 280px;
-  grid-template-rows: minmax(0, 1fr) 200px;
-  grid-template-areas:
-    'media preview inspector'
-    'timeline timeline inspector';
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: 'media preview inspector';
 }
 
 .panel {
@@ -267,47 +265,6 @@
   color: #f8fafc;
 }
 
-.timeline-panel {
-  grid-area: timeline;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.timeline-track {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 120px;
-}
-
-.timeline-placeholder {
-  width: 100%;
-  border: 1px dashed rgba(148, 163, 184, 0.35);
-  border-radius: 1rem;
-  padding: 1rem;
-  text-align: center;
-  color: #94a3b8;
-  background: rgba(15, 23, 42, 0.35);
-}
-
-.timeline-placeholder.active {
-  border-color: rgba(168, 85, 247, 0.6);
-  color: #f8fafc;
-  background: rgba(76, 29, 149, 0.35);
-}
-
-.timeline-placeholder p {
-  margin: 0;
-  font-weight: 600;
-}
-
-.timeline-placeholder span {
-  display: block;
-  font-size: 0.85rem;
-  margin-top: 0.2rem;
-}
-
 @media (max-width: 1100px) {
   .editor-grid {
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -317,8 +274,7 @@
 
   .media-panel,
   .preview-panel,
-  .inspector-panel,
-  .timeline-panel {
+  .inspector-panel {
     grid-area: auto;
   }
 }

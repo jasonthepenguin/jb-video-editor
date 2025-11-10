@@ -208,28 +208,6 @@ function App() {
           )}
         </aside>
 
-        <section className="panel timeline-panel">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Timeline</p>
-              <h2>First pass</h2>
-            </div>
-          </div>
-
-          <div className="timeline-track">
-            {media ? (
-              <div className="timeline-placeholder active">
-                <p>Clip ready for sequencing</p>
-                <span>{media.name}</span>
-              </div>
-            ) : (
-              <div className="timeline-placeholder">
-                <p>Timeline is empty</p>
-                <span>Import a clip to block out edits.</span>
-              </div>
-            )}
-          </div>
-        </section>
       </main>
     </div>
   )
