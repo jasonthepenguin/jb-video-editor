@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent } from 'react'
 import './App.css'
 
@@ -8,6 +8,21 @@ type UploadedMedia = {
   sizeLabel: string
   type: string
 }
+
+type TimelineClip = UploadedMedia & {
+  id: string
+  duration: number
+  track: number
+}
+
+type ClipWithLayout = TimelineClip & {
+  start: number
+  layoutStart: number
+  widthPercent: number
+  safeDuration: number
+}
+
+const MIN_CLIP_LENGTH = 0.01
 
 const formatFileSize = (bytes: number) => {
   if (!Number.isFinite(bytes)) return '—'
@@ -25,50 +40,138 @@ const formatDuration = (seconds: number) => {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
+const generateId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+
+const readVideoDuration = (src: string) =>
+  new Promise<number>((resolve) => {
+    const probe = document.createElement('video')
+    probe.preload = 'metadata'
+    probe.src = src
+    probe.onloadedmetadata = () => {
+      resolve(probe.duration || 0)
+      probe.pause()
+      probe.remove()
+    }
+    probe.onerror = () => {
+      resolve(0)
+      probe.remove()
+    }
+  })
+
 function App() {
-  const [media, setMedia] = useState<UploadedMedia | null>(null)
-  const [scrubProgress, setScrubProgress] = useState(0)
-  const [videoDuration, setVideoDuration] = useState(0)
+  const [clips, setClips] = useState<TimelineClip[]>([])
+  const [activeClipId, setActiveClipId] = useState<string | null>(null)
+  const [timelineProgress, setTimelineProgress] = useState(0)
   const [isDragActive, setIsDragActive] = useState(false)
+  const [draggingClipId, setDraggingClipId] = useState<string | null>(null)
+  const [dropState, setDropState] = useState<
+    { track: number; targetId: string | null; position: 'before' | 'after' | 'end' } | null
+  >(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dragCounter = useRef(0)
+  const objectUrlsRef = useRef(new Set<string>())
+  const pendingSeekRef = useRef<{ clipId: string; time: number } | null>(null)
 
-  useEffect(() => {
-    return () => {
-      if (media) {
-        URL.revokeObjectURL(media.url)
-      }
-    }
-  }, [media])
+  const clipLayouts = useMemo(() => {
+    let actualCursor = 0
+    let layoutCursor = 0
+    const layoutTotal =
+      clips.reduce((sum, clip) => sum + (clip.duration || MIN_CLIP_LENGTH), 0) ||
+      MIN_CLIP_LENGTH
 
-  const loadFile = (file?: File) => {
-    if (!file) return
+    const items: ClipWithLayout[] = clips.map((clip) => {
+      const actualDuration = clip.duration || 0
+      const safeDuration = clip.duration || MIN_CLIP_LENGTH
+      const layoutStart = layoutCursor
+      const start = actualCursor
+      layoutCursor += safeDuration
+      actualCursor += actualDuration
 
-    const nextUrl = URL.createObjectURL(file)
-    setMedia((current) => {
-      if (current) {
-        URL.revokeObjectURL(current.url)
-      }
       return {
-        name: file.name,
-        url: nextUrl,
-        sizeLabel: formatFileSize(file.size),
-        type: file.type || 'video',
+        ...clip,
+        start,
+        layoutStart,
+        widthPercent: (safeDuration / layoutTotal) * 100,
+        safeDuration,
       }
     })
 
-    setVideoDuration(0)
-    setScrubProgress(0)
-    setIsDragActive(false)
-    dragCounter.current = 0
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
+    return {
+      items,
+      totalDuration: actualCursor,
+      layoutTotal,
+    }
+  }, [clips])
+
+  const activeClip = useMemo(() => {
+    if (!clips.length) return null
+    const fallback = clipLayouts.items[0] ?? null
+    return clipLayouts.items.find((clip) => clip.id === activeClipId) ?? fallback
+  }, [clipLayouts.items, clips.length, activeClipId])
+
+  const activeDuration = activeClip?.duration ?? 0
+
+  useEffect(() => {
+    return () => {
+      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!clips.length) {
+      setActiveClipId(null)
+      return
+    }
+
+    if (!activeClipId) {
+      setActiveClipId(clips[0].id)
+    }
+  }, [clips, activeClipId])
+
+  useEffect(() => {
+    setTimelineProgress((prev) => (clips.length ? prev : 0))
+    const video = videoRef.current
+    if (video) {
+      video.currentTime = 0
+    }
+  }, [activeClip?.id, clips.length])
+
+  const loadFile = async (file?: File) => {
+    if (!file) return
+
+    const nextUrl = URL.createObjectURL(file)
+    objectUrlsRef.current.add(nextUrl)
+    const duration = await readVideoDuration(nextUrl)
+    const newClip: TimelineClip = {
+      id: generateId(),
+      name: file.name,
+      url: nextUrl,
+      sizeLabel: formatFileSize(file.size),
+      type: file.type || 'video',
+      duration,
+      track: clips.length % 2,
+    }
+
+    setClips((current) => [...current, newClip])
+    setActiveClipId((current) => current ?? newClip.id)
+    setTimelineProgress(0)
+  }
+
+  const loadFilesSequentially = async (files: File[]) => {
+    for (const file of files) {
+      // eslint-disable-next-line no-await-in-loop
+      await loadFile(file)
     }
   }
 
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    loadFile(event.target.files?.[0])
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? [])
+    if (!files.length) return
+    await loadFilesSequentially(files)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
   }
 
   const handleDragEnter = (event: DragEvent<HTMLLabelElement>) => {
@@ -95,27 +198,173 @@ function App() {
     }
   }
 
-  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
+  const handleDrop = async (event: DragEvent<HTMLLabelElement>) => {
     event.preventDefault()
     event.stopPropagation()
     dragCounter.current = 0
     setIsDragActive(false)
-    const file = event.dataTransfer?.files?.[0]
-    loadFile(file)
+    const files = Array.from(event.dataTransfer?.files ?? [])
+    if (!files.length) return
+    await loadFilesSequentially(files)
   }
 
-  const handleScrub = (value: number) => {
-    setScrubProgress(value)
-    const video = videoRef.current
-    if (!video || !video.duration) return
-    video.currentTime = (value / 100) * video.duration
+  const seekTimelinePercent = (value: number) => {
+    if (!clips.length || !clipLayouts.totalDuration) return
+    const nextValue = Math.min(100, Math.max(0, value))
+    const targetSeconds = (nextValue / 100) * clipLayouts.totalDuration
+
+    const fallbackClip = clipLayouts.items[clipLayouts.items.length - 1]
+    const targetClip =
+      clipLayouts.items.find((clip) => {
+        const clipEnd = clip.start + (clip.duration || MIN_CLIP_LENGTH)
+        return targetSeconds <= clipEnd
+      }) ?? fallbackClip
+
+    if (!targetClip) return
+
+    const clipDuration = targetClip.duration || MIN_CLIP_LENGTH
+    const secondsIntoClip = Math.min(
+      clipDuration,
+      Math.max(0, targetSeconds - targetClip.start)
+    )
+
+    setTimelineProgress(nextValue)
+    setActiveClipId(targetClip.id)
+    pendingSeekRef.current = { clipId: targetClip.id, time: secondsIntoClip }
+
+    if (targetClip.id === activeClip?.id) {
+      const video = videoRef.current
+      if (video) {
+        video.currentTime = secondsIntoClip
+        pendingSeekRef.current = null
+      }
+    }
   }
 
   const syncFromVideo = () => {
     const video = videoRef.current
-    if (!video || !video.duration) return
-    setVideoDuration(video.duration)
-    setScrubProgress((video.currentTime / video.duration) * 100)
+    if (!video || !activeClip || !clipLayouts.totalDuration) return
+    const clipDuration = activeClip.duration || MIN_CLIP_LENGTH
+    const clipTime = Math.min(video.currentTime, clipDuration)
+    const globalSeconds = activeClip.start + clipTime
+    setTimelineProgress((globalSeconds / clipLayouts.totalDuration) * 100)
+  }
+
+  const placeClip = (
+    clipId: string,
+    track: number,
+    targetId: string | null,
+    position: 'before' | 'after' | 'end'
+  ) => {
+    setClips((current) => {
+      if (!clipId) return current
+      const sourceIndex = current.findIndex((clip) => clip.id === clipId)
+      if (sourceIndex === -1) return current
+      const moving = { ...current[sourceIndex], track }
+      const without = current.filter((clip) => clip.id !== clipId)
+
+      if (!targetId || position === 'end') {
+        without.push(moving)
+        return without
+      }
+
+      const targetIndex = without.findIndex((clip) => clip.id === targetId)
+      if (targetIndex === -1) {
+        without.push(moving)
+        return without
+      }
+
+      const insertIndex = position === 'before' ? targetIndex : targetIndex + 1
+      without.splice(insertIndex, 0, moving)
+      return without
+    })
+  }
+
+  const handleClipDragStart = (event: DragEvent<HTMLDivElement>, clipId: string) => {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', clipId)
+    setDraggingClipId(clipId)
+  }
+
+  const handleClipDragEnd = () => {
+    setDraggingClipId(null)
+    setDropState(null)
+  }
+
+  const handleClipDragOverClip = (
+    event: DragEvent<HTMLDivElement>,
+    trackIndex: number,
+    targetClipId: string
+  ) => {
+    if (!draggingClipId || draggingClipId === targetClipId) return
+    event.preventDefault()
+    event.stopPropagation()
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const shouldDropBefore = event.clientX - bounds.left < bounds.width / 2
+    setDropState({
+      track: trackIndex,
+      targetId: targetClipId,
+      position: shouldDropBefore ? 'before' : 'after',
+    })
+  }
+
+  const handleClipDropOnClip = (
+    event: DragEvent<HTMLDivElement>,
+    trackIndex: number,
+    targetClipId: string
+  ) => {
+    if (!draggingClipId || draggingClipId === targetClipId) return
+    event.preventDefault()
+    event.stopPropagation()
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const shouldDropBefore = event.clientX - bounds.left < bounds.width / 2
+    placeClip(draggingClipId, trackIndex, targetClipId, shouldDropBefore ? 'before' : 'after')
+    setDraggingClipId(null)
+    setDropState(null)
+  }
+
+  const handleRowDragOver = (event: DragEvent<HTMLDivElement>, trackIndex: number) => {
+    if (!draggingClipId) return
+    event.preventDefault()
+    setDropState({ track: trackIndex, targetId: null, position: 'end' })
+  }
+
+  const handleRowDrop = (event: DragEvent<HTMLDivElement>, trackIndex: number) => {
+    if (!draggingClipId) return
+    event.preventDefault()
+    placeClip(draggingClipId, trackIndex, null, 'end')
+    setDraggingClipId(null)
+    setDropState(null)
+  }
+
+  const handleLoadedMetadata = () => {
+    const video = videoRef.current
+    if (!video || !activeClip) return
+    if (pendingSeekRef.current && pendingSeekRef.current.clipId === activeClip.id) {
+      const target = Math.min(
+        pendingSeekRef.current.time,
+        video.duration || pendingSeekRef.current.time
+      )
+      video.currentTime = target
+      pendingSeekRef.current = null
+    }
+    syncFromVideo()
+  }
+
+  const handleVideoEnded = () => {
+    if (!activeClip) return
+    const currentIndex = clipLayouts.items.findIndex((clip) => clip.id === activeClip.id)
+    if (currentIndex === -1) return
+    const nextClip = clipLayouts.items[currentIndex + 1]
+    if (nextClip) {
+      setActiveClipId(nextClip.id)
+      pendingSeekRef.current = { clipId: nextClip.id, time: 0 }
+      if (clipLayouts.totalDuration) {
+        setTimelineProgress((nextClip.start / clipLayouts.totalDuration) * 100)
+      }
+    } else {
+      setTimelineProgress(100)
+    }
   }
 
   return (
@@ -124,9 +373,6 @@ function App() {
         <div>
           <p className="eyebrow">jb video lab</p>
           <h1>Personal video editor</h1>
-          <p className="muted">
-            Load a clip, scrub the timeline, and start planning the features you want to build next.
-          </p>
         </div>
         <button
           type="button"
@@ -158,19 +404,30 @@ function App() {
               ref={fileInputRef}
               type="file"
               accept="video/*"
+              multiple
               onChange={handleFileChange}
             />
             <strong>Drop video or browse</strong>
             <span>MP4, MOV, and WebM files stay on your device.</span>
           </label>
 
-          {media ? (
+          {clips.length ? (
             <ul className="media-list">
-              <li>
-                <p>{media.name}</p>
-                <span>{formatDuration(videoDuration)}</span>
-                <span className="format">{media.type || 'video'}</span>
-              </li>
+              {clips.map((clip, index) => (
+                <li key={clip.id} className={clip.id === activeClip?.id ? 'active' : ''}>
+                  <button type="button" onClick={() => setActiveClipId(clip.id)}>
+                    <div className="media-line">
+                      <p>{clip.name}</p>
+                      <span className="order-indicator">#{index + 1}</span>
+                    </div>
+                    <div className="media-meta">
+                      <span>{formatDuration(clip.duration)}</span>
+                      <span className="format">{clip.type || 'video'}</span>
+                      <span className="track-indicator">Track {clip.track + 1}</span>
+                    </div>
+                  </button>
+                </li>
+              ))}
             </ul>
           ) : (
             <div className="empty-state compact">
@@ -183,19 +440,21 @@ function App() {
           <div className="panel-header">
             <div>
               <p className="eyebrow">Preview</p>
-              <h2>{media?.name ?? 'No clip loaded'}</h2>
+              <h2>{activeClip?.name ?? 'No clip loaded'}</h2>
             </div>
-            {media && <span className="badge">{media.sizeLabel}</span>}
+            {activeClip && <span className="badge">{activeClip.sizeLabel}</span>}
           </div>
 
           <div className="preview-frame">
-            {media ? (
+            {activeClip ? (
               <video
                 ref={videoRef}
-                src={media.url}
+                key={activeClip.id}
+                src={activeClip.url}
                 controls
-                onLoadedMetadata={syncFromVideo}
+                onLoadedMetadata={handleLoadedMetadata}
                 onTimeUpdate={syncFromVideo}
+                onEnded={handleVideoEnded}
               />
             ) : (
               <div className="empty-state">
@@ -212,13 +471,17 @@ function App() {
               type="range"
               min="0"
               max="100"
-              value={scrubProgress}
-              onChange={(event) => handleScrub(Number(event.target.value))}
-              disabled={!media}
+              value={timelineProgress}
+              onChange={(event) => seekTimelinePercent(Number(event.target.value))}
+              disabled={!clips.length}
             />
             <div className="scrub-meta">
-              <span>{formatDuration((scrubProgress / 100) * videoDuration)}</span>
-              <span>{formatDuration(videoDuration)}</span>
+              <span>
+                {clipLayouts.totalDuration
+                  ? formatDuration((timelineProgress / 100) * clipLayouts.totalDuration)
+                  : '0:00'}
+              </span>
+              <span>{formatDuration(clipLayouts.totalDuration)}</span>
             </div>
           </div>
         </section>
@@ -231,23 +494,27 @@ function App() {
             </div>
           </div>
 
-          {media ? (
+          {activeClip ? (
             <dl className="meta-grid">
               <div>
                 <dt>Name</dt>
-                <dd>{media.name}</dd>
+                <dd>{activeClip.name}</dd>
               </div>
               <div>
                 <dt>Type</dt>
-                <dd>{media.type || 'video'}</dd>
+                <dd>{activeClip.type || 'video'}</dd>
               </div>
               <div>
                 <dt>Duration</dt>
-                <dd>{formatDuration(videoDuration)}</dd>
+                <dd>{formatDuration(activeDuration)}</dd>
               </div>
               <div>
                 <dt>Size</dt>
-                <dd>{media.sizeLabel}</dd>
+                <dd>{activeClip.sizeLabel}</dd>
+              </div>
+              <div>
+                <dt>Track</dt>
+                <dd>Track {activeClip.track + 1}</dd>
               </div>
             </dl>
           ) : (
@@ -257,6 +524,82 @@ function App() {
           )}
         </aside>
 
+        <section className="panel timeline-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Timeline</p>
+              <h2>Tracks</h2>
+            </div>
+          </div>
+
+          <div className={`timeline-track${clips.length ? '' : ' disabled'}`}>
+            {clips.length ? (
+              <>
+                <div className="timeline-playhead" style={{ left: `${timelineProgress}%` }} />
+                <div className="timeline-rows">
+                  {[0, 1].map((trackIndex) => (
+                    <div key={trackIndex} className="timeline-row">
+                      <span className="track-label">Track {trackIndex + 1}</span>
+                      <div
+                        className={`timeline-row-content${
+                          dropState?.track === trackIndex && dropState.targetId === null
+                            ? ' drop-at-end'
+                            : ''
+                        }`}
+                        onDragOver={(event) => handleRowDragOver(event, trackIndex)}
+                        onDrop={(event) => handleRowDrop(event, trackIndex)}
+                      >
+                        {clipLayouts.items.filter((clip) => clip.track === trackIndex).length ? (
+                          clipLayouts.items
+                            .filter((clip) => clip.track === trackIndex)
+                            .map((clip) => (
+                              <div
+                                key={clip.id}
+                                className={`timeline-clip${
+                                  clip.id === activeClip?.id ? ' active' : ''
+                                }${
+                                  draggingClipId === clip.id ? ' dragging' : ''
+                                }${
+                                  dropState &&
+                                  dropState.targetId === clip.id &&
+                                  dropState.track === trackIndex
+                                    ? dropState.position === 'before'
+                                      ? ' drop-before'
+                                      : ' drop-after'
+                                    : ''
+                                }`}
+                                style={{ flexBasis: `${clip.widthPercent}%` }}
+                                onClick={() => setActiveClipId(clip.id)}
+                                draggable
+                                onDragStart={(event) => handleClipDragStart(event, clip.id)}
+                                onDragEnd={handleClipDragEnd}
+                                onDragOver={(event) => handleClipDragOverClip(event, trackIndex, clip.id)}
+                                onDrop={(event) => handleClipDropOnClip(event, trackIndex, clip.id)}
+                              >
+                                <div className="clip-title">{clip.name}</div>
+                              </div>
+                            ))
+                        ) : (
+                          <div className="timeline-row-empty">Drop clips here</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="timeline-empty">
+                <p>Timeline waiting for media</p>
+                <span>Import clips, then arrange them across the tracks.</span>
+              </div>
+            )}
+          </div>
+
+          <div className="timeline-timecodes">
+            <span>0:00</span>
+            <span>{formatDuration(clipLayouts.totalDuration)}</span>
+          </div>
+        </section>
       </main>
     </div>
   )
