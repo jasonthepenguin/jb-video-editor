@@ -176,7 +176,8 @@
   position: relative;
   background: #050505;
   border-radius: 1rem;
-  min-height: 320px;
+  width: 100%;
+  aspect-ratio: 16 / 9;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -269,6 +270,9 @@
   margin: 0;
   font-weight: 600;
   color: #f8fafc;
+  max-width: 100%;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 1100px) {
