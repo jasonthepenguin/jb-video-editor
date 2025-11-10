@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ChangeEvent } from 'react'
+import type { ChangeEvent, DragEvent } from 'react'
 import './App.css'
 
 type UploadedMedia = {
@@ -29,8 +29,10 @@ function App() {
   const [media, setMedia] = useState<UploadedMedia | null>(null)
   const [scrubProgress, setScrubProgress] = useState(0)
   const [videoDuration, setVideoDuration] = useState(0)
+  const [isDragActive, setIsDragActive] = useState(false)
   const videoRef = useRef<HTMLVideoElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const dragCounter = useRef(0)
 
   useEffect(() => {
     return () => {
@@ -40,8 +42,7 @@ function App() {
     }
   }, [media])
 
-  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
+  const loadFile = (file?: File) => {
     if (!file) return
 
     const nextUrl = URL.createObjectURL(file)
@@ -59,6 +60,48 @@ function App() {
 
     setVideoDuration(0)
     setScrubProgress(0)
+    setIsDragActive(false)
+    dragCounter.current = 0
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    loadFile(event.target.files?.[0])
+  }
+
+  const handleDragEnter = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dragCounter.current += 1
+    setIsDragActive(true)
+  }
+
+  const handleDragLeave = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dragCounter.current = Math.max(0, dragCounter.current - 1)
+    if (dragCounter.current === 0) {
+      setIsDragActive(false)
+    }
+  }
+
+  const handleDragOver = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!isDragActive) {
+      setIsDragActive(true)
+    }
+  }
+
+  const handleDrop = (event: DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dragCounter.current = 0
+    setIsDragActive(false)
+    const file = event.dataTransfer?.files?.[0]
+    loadFile(file)
   }
 
   const handleScrub = (value: number) => {
@@ -104,7 +147,13 @@ function App() {
             <span className="badge">local only</span>
           </div>
 
-          <label className="upload-tile">
+          <label
+            className={`upload-tile${isDragActive ? ' drag-active' : ''}`}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+          >
             <input
               ref={fileInputRef}
               type="file"

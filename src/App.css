@@ -122,6 +122,12 @@
   background: rgba(124, 58, 237, 0.08);
 }
 
+.upload-tile.drag-active {
+  border-color: #a855f7;
+  background: rgba(76, 29, 149, 0.2);
+  box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.2);
+}
+
 .upload-tile input {
   display: none;
 }
