@@ -9,19 +9,6 @@ type UploadedMedia = {
   type: string
 }
 
-const librarySeeds = [
-  { id: 'clip-1', title: 'City Drone Orbit', length: '00:06', format: '4K H.264' },
-  { id: 'clip-2', title: 'Studio Interview', length: '00:14', format: '1080p ProRes' },
-  { id: 'clip-3', title: 'B-Roll Cutaways', length: '00:10', format: '4K HEVC' },
-]
-
-const timelineSegments = [
-  { id: 't1', label: 'Intro', color: '#a855f7', length: 2 },
-  { id: 't2', label: 'Interview', color: '#22d3ee', length: 3 },
-  { id: 't3', label: 'B-Roll', color: '#f472b6', length: 2 },
-  { id: 't4', label: 'Outro', color: '#facc15', length: 1 },
-]
-
 const formatFileSize = (bytes: number) => {
   if (!Number.isFinite(bytes)) return '—'
   if (bytes === 0) return '0 B'
@@ -128,15 +115,19 @@ function App() {
             <span>MP4, MOV, and WebM files stay on your device.</span>
           </label>
 
-          <ul className="media-list">
-            {librarySeeds.map((clip) => (
-              <li key={clip.id}>
-                <p>{clip.title}</p>
-                <span>{clip.length}</span>
-                <span className="format">{clip.format}</span>
+          {media ? (
+            <ul className="media-list">
+              <li>
+                <p>{media.name}</p>
+                <span>{formatDuration(videoDuration)}</span>
+                <span className="format">{media.type || 'video'}</span>
               </li>
-            ))}
-          </ul>
+            </ul>
+          ) : (
+            <div className="empty-state compact">
+              <p>No clips imported yet.</p>
+            </div>
+          )}
         </aside>
 
         <section className="panel preview-panel">
@@ -221,20 +212,22 @@ function App() {
           <div className="panel-header">
             <div>
               <p className="eyebrow">Timeline</p>
-              <h2>Storyboard pass</h2>
+              <h2>First pass</h2>
             </div>
           </div>
 
           <div className="timeline-track">
-            {timelineSegments.map((segment) => (
-              <div
-                key={segment.id}
-                className="timeline-clip"
-                style={{ flex: segment.length, backgroundColor: segment.color }}
-              >
-                <span>{segment.label}</span>
+            {media ? (
+              <div className="timeline-placeholder active">
+                <p>Clip ready for sequencing</p>
+                <span>{media.name}</span>
               </div>
-            ))}
+            ) : (
+              <div className="timeline-placeholder">
+                <p>Timeline is empty</p>
+                <span>Import a clip to block out edits.</span>
+              </div>
+            )}
           </div>
         </section>
       </main>
